@@ -264,8 +264,6 @@ runcmd:
           lxc config set core.metrics_address ":8444"
           export COS_ADDR=\$(host COS | awk '/has address/ { print \$4 }')
           lxc config set loki.api.url="http://\${COS_ADDR}/cos-loki-0"
-	  lxc config set loki.instance=\$(ssh COS -- juju ssh --container prometheus prometheus/0 cat /etc/prometheus/prometheus.yml | grep -oP 'job_name: \K.*prometheus-scrape-target-k8s_external_jobs')
-
       fi
   - [ snap, install, grafana-agent ]
   - |
@@ -398,6 +396,10 @@ write_files:
 		tls_config_key_file="\$(cat /home/ubuntu/metrics.key)" \
 		tls_config_server_name="127.0.0.1" \
 		targets=\$COMPUTE_1_IP:8443,\$COMPUTE_2_IP:8443,\$COMPUTE_3_IP:8443
+      LOKI_INSTANCE="\$(juju ssh --container prometheus prometheus/0 cat /etc/prometheus/prometheus.yml | grep -oP 'job_name: \K.*prometheus-scrape-target-k8s_external_jobs')"
+      ssh -o StrictHostKeyChecking=no compute-1.maas << 'EOF'
+          lxc config set loki.instance="\${LOKI_INSTANCE}"
+      EOF
 runcmd:
   - [ chmod, 700, /home/ubuntu/.ssh]
   - [ chmod, 600, /home/ubuntu/.ssh/id_ed25519]
