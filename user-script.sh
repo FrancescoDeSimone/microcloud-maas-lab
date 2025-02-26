@@ -264,6 +264,8 @@ runcmd:
           lxc config set core.metrics_address ":8444"
           export COS_ADDR=\$(host COS | awk '/has address/ { print \$4 }')
           lxc config set loki.api.url="http://\${COS_ADDR}/cos-loki-0"
+	  lxc config set loki.instance=\$(ssh COS -- juju ssh --container prometheus prometheus/0 cat /etc/prometheus/prometheus.yml | grep -oP 'job_name: \K.*prometheus-scrape-target-k8s_external_jobs')
+
       fi
   - [ snap, install, grafana-agent ]
   - |
@@ -378,6 +380,7 @@ write_files:
       #!/bin/bash
       set -x
       openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:secp384r1 -sha384 -keyout /home/ubuntu/metrics.key -nodes -out /home/ubuntu/metrics.crt -days 3650 -subj "/CN=metrics.local"
+      scp /home/ubuntu/metrics.crt compute-1:/home/ubuntu/metrics.crt
       ssh -o StrictHostKeyChecking=no compute-1.maas << 'EOF'
         sudo lxc config trust add /home/ubuntu/metrics.crt --type=metrics
       EOF
@@ -387,7 +390,14 @@ write_files:
       COMPUTE_3_IP=\$(host compute-3 | awk '/has address/ { print \$4 }')
 
       # Set up Prometheus configuration with dynamically resolved IPs
-      juju config prometheus-scrape-target-k8s metrics_path=/1.0/metrics scheme=https tls_config_ca_file="\$(cat /tmp/cluster.crt)" tls_config_cert_file="\$(cat /home/ubuntu/metrics.crt)" tls_config_key_file="\$(cat /home/ubuntu/metrics.key)" tls_config_server_name="127.0.0.1" targets=\$COMPUTE_1_IP:8443,\$COMPUTE_2_IP:8443,\$COMPUTE_3_IP:8443
+      juju config prometheus-scrape-target-k8s \
+		metrics_path=/1.0/metrics \
+		scheme=https \
+		tls_config_ca_file="\$(cat /tmp/cluster.crt)" \
+		tls_config_cert_file="\$(cat /home/ubuntu/metrics.crt)" \
+		tls_config_key_file="\$(cat /home/ubuntu/metrics.key)" \
+		tls_config_server_name="127.0.0.1" \
+		targets=\$COMPUTE_1_IP:8443,\$COMPUTE_2_IP:8443,\$COMPUTE_3_IP:8443
 runcmd:
   - [ chmod, 700, /home/ubuntu/.ssh]
   - [ chmod, 600, /home/ubuntu/.ssh/id_ed25519]
