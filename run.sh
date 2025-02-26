@@ -25,14 +25,6 @@ lxc start microcloud
 sleep 15
 
 lxc file push -p --uid 1000 --gid 1000 --mode 0600 ~/.ssh/authorized_keys microcloud/home/ubuntu/.ssh/
-while true; do
-    sleep 15
-    status=$(lxc exec -t microstack -- cloud-init status | grep -oP '^status:\s+\K\w+')
-    if [[ "$status" != "running" ]]; then
-        notify-send "Microcloud deployment" "Current status: $status"
-	exit
-    fi
-done &
 
 if which ts >/dev/null; then
     lxc exec -t microcloud -- tail -f -n+1 /var/log/cloud-init-output.log | ts

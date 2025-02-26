@@ -161,7 +161,6 @@ maas admin pods create \
   name=localhost \
   power_address='qemu+ssh://root@127.0.0.1/system'
 
-
 # compose machines
 num_machines=3
 for i in $(seq 1 "$num_machines"); do
@@ -194,18 +193,34 @@ for i in $(seq 1 "$num_machines"); do
 
 done
 
+PRIVATE_KEY_CONTENT=$(cat ~/.ssh/id_ed25519 | sed ':a;N;$!ba;s/\n/\n      /g' )
 # cloud-init for installing packages
-cat > cloud-init.yaml <<EOF
+cat >cloud-init.yaml <<EOF
 #cloud-config
 package_update: true
 package_upgrade: true
 packages:
   - snapd
 write_files:
-  - path: /etc/snap/snappy.conf
+  - path: /home/ubuntu/.ssh/id_ed25519
+    permissions: '0600'
     content: |
-      experimental-features: ["unsafe"]
+      $PRIVATE_KEY_CONTENT
+  - path: /home/ubuntu/.ssh/id_ed25519.pub
+    permissions: '0644'
+    content: |
+      $(cat ~/.ssh/id_ed25519.pub)
+  - path: /home/ubuntu/.ssh/config
+    permissions: '0644'
+    content: |
+      Host *
+        StrictHostKeyChecking no
+        UserKnownHostsFile /dev/null
 runcmd:
+  - [ chmod, 700, /home/ubuntu/.ssh]
+  - [ chmod, 600, /home/ubuntu/.ssh/id_ed25519]
+  - [ chmod, 644, /home/ubuntu/.ssh/id_ed25519.pub]
+  - [ chown, -R, ubuntu:ubuntu, /home/ubuntu]
   - [ snap, remove, --purge, lxd ]
   - [ snap, install, lxd, --channel=5.21/stable, --cohort=+ ]
   - [ snap, install, microceph, --channel=squid/stable, --cohort=+ ]
@@ -245,7 +260,44 @@ runcmd:
   - |
       if [ "\$(hostname)" = "compute-1" ]; then
           lxc config set cluster.healing_threshold 1
+          lxc config set core.https_address ":8443"
+          lxc config set core.metrics_address ":8444"
+          export COS_ADDR=\$(host COS | awk '/has address/ { print \$4 }')
+          lxc config set loki.api.url="http://\${COS_ADDR}/cos-loki-0"
       fi
+  - [ snap, install, grafana-agent ]
+  - |
+      export COS_ADDR=\$(host COS | awk '/has address/ { print \$4 }')
+      cat <<EOF > /var/snap/grafana-agent/current/etc/grafana-agent.yaml
+      integrations:
+        agent:
+          enabled: true
+        node_exporter:
+          enabled: true
+
+      metrics:
+        global:
+          remote_write:
+            - url: http://\${COS_ADDR}/cos-prometheus-0/api/v1/write
+
+      logs:
+        configs:
+        - name: default
+          positions:
+            filename: /tmp/positions.yaml
+          scrape_configs:
+            - job_name: varlogs
+              static_configs:
+                - targets: [localhost]
+                  labels:
+                    job: varlogs
+                    __path__: /var/log/*log
+        clients:
+          - url: http://\${COS_ADDR}/cos-loki-0/loki/api/v1/push
+      EOF
+  - [ snap, restart, grafana-agent ]
+  - [ mv, /root/snap, /home/ubuntu/snap ]
+  - [ chown, ubuntu:ubuntu, -R, /home/ubuntu/snap]
 EOF
 
 virt-install \
@@ -273,65 +325,104 @@ maas admin machines create \
   power_parameters_power_id="COS"
 
 # cloud-init for installing packages
-cat > cloud-init-cos.yaml <<EOF
+cat >cloud-init-cos.yaml <<EOF
 #cloud-config
 package_update: true
 package_upgrade: true
 packages:
   - snapd
 write_files:
-  - path: /usr/local/bin/setup-metallb.sh
+  - path: /home/ubuntu/.ssh/id_ed25519
+    permissions: '0600'
+    content: |
+      $PRIVATE_KEY_CONTENT
+  - path: /home/ubuntu/.ssh/id_ed25519.pub
+    permissions: '0644'
+    content: |
+      $(cat ~/.ssh/id_ed25519.pub)
+  - path: /home/ubuntu/.ssh/config
+    permissions: '0644'
+    content: |
+      Host *
+        StrictHostKeyChecking no
+        UserKnownHostsFile /dev/null
+  - path: /usr/local/bin/setup-addon.sh
     permissions: '0755'
     content: |
       #!/bin/bash
+      set -x
+      microk8s enable dns
+      microk8s enable hostpath-storage
       IPADDR=\$(ip -4 -j route get 2.2.2.2 | jq -r '.[] | .prefsrc')
       microk8s enable metallb:\$IPADDR-\$IPADDR
+      microk8s kubectl rollout status deployments/hostpath-provisioner -n kube-system, -w
+      microk8s kubectl rollout status deployments/coredns -n kube-system -w
+      microk8s kubectl rollout status daemonset.apps/speaker -n metallb-system -w
   - path: /usr/local/bin/setup-juju.sh
     permissions: '0755'
     content: |
       #!/bin/bash
+      set -x
       sudo usermod -a -G snap_microk8s ubuntu
       # Make sure group is applied
       newgrp snap_microk8s <<EOF
-      sudo -u ubuntu juju bootstrap microk8s
+        juju bootstrap microk8s
+        juju add-model cos
+        juju deploy cos-lite --trust
+        juju deploy prometheus-scrape-target-k8s
+        juju relate prometheus prometheus-scrape-target-k8s
       EOF
+  - path: /usr/local/bin/setup-metrics.sh
+    permissions: '0755'
+    content: |
+      #!/bin/bash
+      set -x
+      openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:secp384r1 -sha384 -keyout /home/ubuntu/metrics.key -nodes -out /home/ubuntu/metrics.crt -days 3650 -subj "/CN=metrics.local"
+      ssh -o StrictHostKeyChecking=no compute-1.maas << 'EOF'
+        sudo lxc config trust add /home/ubuntu/metrics.crt --type=metrics
+      EOF
+      ssh -o StrictHostKeyChecking=no compute-1.maas "sudo lxc query /1.0" | jq -r .environment.certificate > /tmp/cluster.crt
+      COMPUTE_1_IP=\$(host compute-1 | awk '/has address/ { print \$4 }')
+      COMPUTE_2_IP=\$(host compute-2 | awk '/has address/ { print \$4 }')
+      COMPUTE_3_IP=\$(host compute-3 | awk '/has address/ { print \$4 }')
+
+      # Set up Prometheus configuration with dynamically resolved IPs
+      juju config prometheus-scrape-target-k8s metrics_path=/1.0/metrics scheme=https tls_config_ca_file=\$(cat /tmp/cluster.crt) tls_config_cert_file=\$(cat /home/ubuntu/metrics.crt) tls_config_key_file=\$(cat /home/ubuntu/metrics.key) tls_config_server_name="127.0.0.1" targets=\$COMPUTE_1_IP:8443,\$COMPUTE_2_IP:8443,\$COMPUTE_3_IP:8443
 runcmd:
+  - [ chmod, 700, /home/ubuntu/.ssh]
+  - [ chmod, 600, /home/ubuntu/.ssh/id_ed25519]
+  - [ chmod, 644, /home/ubuntu/.ssh/id_ed25519.pub]
+  - [ chown, -R, ubuntu:ubuntu, /home/ubuntu]
   - [ snap, install, microk8s, --channel=1.32-strict/stable ]
   - [ snap, install, juju ]
-  - [ microk8s, enable, dns ]
-  - [ microk8s, enable, hostpath-storage ]
   - [ apt, install, jq, --yes ]
-  - [ /usr/local/bin/setup-metallb.sh ]
-  - [ /usr/local/bin/setup-juju.sh ]
-  - [ microk8s, kubectl, rollout, status, deployments/hostpath-provisioner, -n, kube-system, -w ]
-  - [ microk8s, kubectl, rollout, status, deployments/coredns, -n, kube-system, -w ]
-  - [ microk8s, kubectl, rollout, status, daemonset.apps/speaker, -n, metallb-system, -w ]
-  - [ sudo, -u, ubuntu, juju, add-model, cos ]
-  - [ sudo, -u, ubuntu, juju, deploy, cos-lite, --trust ]
+  - [ /usr/local/bin/setup-addon.sh ]
+  - [ sudo, -u, ubuntu, /usr/local/bin/setup-juju.sh ]
+  - [ sudo, -u, ubuntu, /usr/local/bin/setup-metrics.sh]
 EOF
 
 for i in $(seq 1 "$num_machines"); do
-	while true; do
-	  status=$(maas admin machines read | jq -r ".[] | select(.hostname == \"compute-$i\") | .status_name")
-	  if [[ "$status" == "Ready" ]]; then
-	      echo "Machine $i is ready!"
-	      break
-	  fi
-	  echo "Waiting for machine $i to be commissioned (current status: $status)..."
-	  sleep 15
-	done
-        system_id=$(maas admin nodes read | jq -r ".[] | select(.hostname == \"compute-$i\") | .system_id")
-	maas admin machine deploy $system_id user_data="$(base64 -w0 cloud-init.yaml)"
+  while true; do
+    status=$(maas admin machines read | jq -r ".[] | select(.hostname == \"compute-$i\") | .status_name")
+    if [[ "$status" == "Ready" ]]; then
+      echo "Machine $i is ready!"
+      break
+    fi
+    echo "Waiting for machine $i to be commissioned (current status: $status)..."
+    sleep 15
+  done
+  system_id=$(maas admin nodes read | jq -r ".[] | select(.hostname == \"compute-$i\") | .system_id")
+  maas admin machine deploy "$system_id" user_data="$(base64 -w0 cloud-init.yaml)"
 done
 
 while true; do
   status=$(maas admin machines read | jq -r ".[] | select(.hostname == \"COS\") | .status_name")
   if [[ "$status" == "Ready" ]]; then
-      echo "Machine COS is ready!"
-      break
+    echo "Machine COS is ready!"
+    break
   fi
   echo "Waiting for machine COS to be commissioned (current status: $status)..."
   sleep 15
 done
 system_id=$(maas admin nodes read | jq -r ".[] | select(.hostname == \"COS\") | .system_id")
-maas admin machine deploy $system_id user_data="$(base64 -w0 cloud-init-cos.yaml)"
+maas admin machine deploy "$system_id" user_data="$(base64 -w0 cloud-init-cos.yaml)"
