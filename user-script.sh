@@ -387,7 +387,7 @@ write_files:
       COMPUTE_3_IP=\$(host compute-3 | awk '/has address/ { print \$4 }')
 
       # Set up Prometheus configuration with dynamically resolved IPs
-      juju config prometheus-scrape-target-k8s metrics_path=/1.0/metrics scheme=https tls_config_ca_file=\$(cat /tmp/cluster.crt) tls_config_cert_file=\$(cat /home/ubuntu/metrics.crt) tls_config_key_file=\$(cat /home/ubuntu/metrics.key) tls_config_server_name="127.0.0.1" targets=\$COMPUTE_1_IP:8443,\$COMPUTE_2_IP:8443,\$COMPUTE_3_IP:8443
+      juju config prometheus-scrape-target-k8s metrics_path=/1.0/metrics scheme=https tls_config_ca_file="\$(cat /tmp/cluster.crt)" tls_config_cert_file="\$(cat /home/ubuntu/metrics.crt)" tls_config_key_file="\$(cat /home/ubuntu/metrics.key)" tls_config_server_name="127.0.0.1" targets=\$COMPUTE_1_IP:8443,\$COMPUTE_2_IP:8443,\$COMPUTE_3_IP:8443
 runcmd:
   - [ chmod, 700, /home/ubuntu/.ssh]
   - [ chmod, 600, /home/ubuntu/.ssh/id_ed25519]
