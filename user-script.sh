@@ -399,15 +399,13 @@ write_files:
       LOKI_INSTANCE=""
       while [ -z "\$LOKI_INSTANCE" ]; do
           # Run the juju command and try to extract the job_name
-          LOKI_INSTANCE=\$(juju ssh --container prometheus prometheus/0 cat /etc/prometheus/prometheus.yml | grep -oP 'job_name: \K.*prometheus-scrape-target-k8s_external_jobs')
+          LOKI_INSTANCE="\$(juju ssh --container prometheus prometheus/0 cat /etc/prometheus/prometheus.yml | grep -oP 'job_name: \K.*prometheus-scrape-target-k8s_external_jobs')"
           if [ -z "\$LOKI_INSTANCE" ]; then
               echo "LOKI_INSTANCE is empty. Retrying in 15 seconds..."
               sleep 15
           fi
       done
-      ssh -o StrictHostKeyChecking=no compute-1.maas << 'EOF'
-          lxc config set loki.instance="\${LOKI_INSTANCE}"
-      EOF
+      ssh -o StrictHostKeyChecking=no compute-1 "lxc config set loki.instance=\${LOKI_INSTANCE}"
 runcmd:
   - [ chmod, 700, /home/ubuntu/.ssh]
   - [ chmod, 600, /home/ubuntu/.ssh/id_ed25519]
@@ -417,7 +415,7 @@ runcmd:
   - [ snap, install, juju ]
   - [ apt, install, jq, --yes ]
   - [ /usr/local/bin/setup-addon.sh ]
-  - [ sudo, -u, ubuntu, /usr/local/bin/setup-juju.sh ]
+  - [ sudo, -i, -u, ubuntu, /usr/local/bin/setup-juju.sh ]
   - [ sudo, -u, ubuntu, /usr/local/bin/setup-metrics.sh]
 EOF
 
