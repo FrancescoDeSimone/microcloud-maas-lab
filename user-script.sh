@@ -193,7 +193,7 @@ for i in $(seq 1 "$num_machines"); do
 
 done
 
-PRIVATE_KEY_CONTENT=$(cat ~/.ssh/id_ed25519 | sed ':a;N;$!ba;s/\n/\n      /g' )
+PRIVATE_KEY_CONTENT=$(cat ~/.ssh/id_ed25519 | sed ':a;N;$!ba;s/\n/\n      /g')
 # cloud-init for installing packages
 cat >cloud-init.yaml <<EOF
 #cloud-config
@@ -389,14 +389,22 @@ write_files:
 
       # Set up Prometheus configuration with dynamically resolved IPs
       juju config prometheus-scrape-target-k8s \
-		metrics_path=/1.0/metrics \
-		scheme=https \
-		tls_config_ca_file="\$(cat /tmp/cluster.crt)" \
-		tls_config_cert_file="\$(cat /home/ubuntu/metrics.crt)" \
-		tls_config_key_file="\$(cat /home/ubuntu/metrics.key)" \
-		tls_config_server_name="127.0.0.1" \
-		targets=\$COMPUTE_1_IP:8443,\$COMPUTE_2_IP:8443,\$COMPUTE_3_IP:8443
-      LOKI_INSTANCE="\$(juju ssh --container prometheus prometheus/0 cat /etc/prometheus/prometheus.yml | grep -oP 'job_name: \K.*prometheus-scrape-target-k8s_external_jobs')"
+           metrics_path=/1.0/metrics \
+           scheme=https \
+           tls_config_ca_file="\$(cat /tmp/cluster.crt)" \
+           tls_config_cert_file="\$(cat /home/ubuntu/metrics.crt)" \
+           tls_config_key_file="\$(cat /home/ubuntu/metrics.key)" \
+           tls_config_server_name="127.0.0.1" \
+           targets=\$COMPUTE_1_IP:8443,\$COMPUTE_2_IP:8443,\$COMPUTE_3_IP:8443
+      LOKI_INSTANCE=""
+      while [ -z "\$LOKI_INSTANCE" ]; do
+          # Run the juju command and try to extract the job_name
+          LOKI_INSTANCE=\$(juju ssh --container prometheus prometheus/0 cat /etc/prometheus/prometheus.yml | grep -oP 'job_name: \K.*prometheus-scrape-target-k8s_external_jobs')
+          if [ -z "\$LOKI_INSTANCE" ]; then
+              echo "LOKI_INSTANCE is empty. Retrying in 15 seconds..."
+              sleep 15
+          fi
+      done
       ssh -o StrictHostKeyChecking=no compute-1.maas << 'EOF'
           lxc config set loki.instance="\${LOKI_INSTANCE}"
       EOF
