@@ -226,6 +226,10 @@ runcmd:
   - [ snap, install, microceph, --channel=squid/stable, --cohort=+ ]
   - [ snap, install, microovn, --channel=24.03/stable, --cohort=+ ]
   - [ snap, install, microcloud, --channel=2/stable, --cohort=+ ]
+  - [ snap, install, grafana-agent ]
+  - [ apt-get, install, grafana-agent ]
+  - [ snap, set, lxd, criu.enable=true ] # container migration (only busybox image)
+  - [ systemctl, reload, snap.lxd.daemon ]
   - |
       cat <<EOF | sudo microcloud preseed
       initiator: compute-1
@@ -259,13 +263,13 @@ runcmd:
       EOF
   - |
       if [ "\$(hostname)" = "compute-1" ]; then
-          lxc config set cluster.healing_threshold 1
+          lxc config set cluster.healing_threshold 1 # selfhealing
+          lxc config set instances.migration.stateful=true # vm migration (only shared storage)
           lxc config set core.https_address ":8443"
           lxc config set core.metrics_address ":8444"
           export COS_ADDR=\$(host COS | awk '/has address/ { print \$4 }')
           lxc config set loki.api.url="http://\${COS_ADDR}/cos-loki-0"
       fi
-  - [ snap, install, grafana-agent ]
   - |
       export COS_ADDR=\$(host COS | awk '/has address/ { print \$4 }')
       cat <<EOF > /var/snap/grafana-agent/current/etc/grafana-agent.yaml
