@@ -267,6 +267,7 @@ runcmd:
           lxc config set instances.migration.stateful=true # vm migration (only shared storage)
           lxc config set core.https_address ":8443"
           lxc config set core.metrics_address ":8444"
+          lxc network set UPLINK ipv4.routes 192.168.171.0/28
           export COS_ADDR=\$(host COS | awk '/has address/ { print \$4 }')
           lxc config set loki.api.url="http://\${COS_ADDR}/cos-loki-0"
       fi
