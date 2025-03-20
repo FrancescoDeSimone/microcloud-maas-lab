@@ -227,7 +227,6 @@ runcmd:
   - [ snap, install, microovn, --channel=24.03/stable, --cohort=+ ]
   - [ snap, install, microcloud, --channel=2/stable, --cohort=+ ]
   - [ snap, install, grafana-agent ]
-  - [ apt-get, install, grafana-agent ]
   - [ snap, set, lxd, criu.enable=true ] # container migration (only busybox image)
   - [ systemctl, reload, snap.lxd.daemon ]
   - |
